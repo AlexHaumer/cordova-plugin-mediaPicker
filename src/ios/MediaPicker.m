@@ -2,6 +2,7 @@
 
 #import <Cordova/CDV.h>
 #import "DmcPickerViewController.h"
+#import "UIImage+CropScaleOrientation.h"
 @interface MediaPicker : CDVPlugin <DmcPickerDelegate>{
   // Member variables go here.
     NSString* callbackId;
@@ -34,6 +35,10 @@
         dmc.maxSelectSize=[[options objectForKey:@"maxSelectSize"]integerValue];
     }@catch (NSException *exception) {
         NSLog(@"Exception: %@", exception);
+    }
+    dmc.modalPresentationStyle = 0;
+    if (@available(iOS 13.0, *)) {
+        dmc.modalInPresentation = true;
     }
     dmc._delegate=self;
     [self.viewController presentViewController:[[UINavigationController alloc]initWithRootViewController:dmc] animated:YES completion:nil];
@@ -73,30 +78,45 @@
 
 -(void)imageToSandbox:(PHAsset *)asset dmcPickerPath:(NSString*)dmcPickerPath aListArray:(NSMutableArray*)aListArray selectArray:(NSMutableArray*)selectArray index:(int)index{
     PHImageRequestOptions *options = [[PHImageRequestOptions alloc] init];
+    options.synchronous = NO;
     options.networkAccessAllowed = YES;
     options.resizeMode = PHImageRequestOptionsResizeModeFast;
+    options.version = PHImageRequestOptionsVersionCurrent;
     options.progressHandler = ^(double progress, NSError *error, BOOL *stop, NSDictionary *info) {
         NSString *compressCompletedjs = [NSString stringWithFormat:@"MediaPicker.icloudDownloadEvent(%f,%i)", progress,index];
         [self.commandDelegate evalJs:compressCompletedjs];
     };
     [[PHImageManager defaultManager] requestImageDataForAsset:asset  options:options resultHandler:^(NSData * _Nullable imageData, NSString * _Nullable dataUTI, UIImageOrientation orientation, NSDictionary * _Nullable info) {
-        NSString *filename=[asset valueForKey:@"filename"];
-        NSString *fullpath=[NSString stringWithFormat:@"%@/%@%@", dmcPickerPath,[[NSProcessInfo processInfo] globallyUniqueString], filename];
-        NSNumber *size=[NSNumber numberWithLong:imageData.length];
+        if(imageData != nil) {
+            NSString *filename=[asset valueForKey:@"filename"];
 
-        NSError *error = nil;
-        if (![imageData writeToFile:fullpath options:NSAtomicWrite error:&error]) {
-            NSLog(@"%@", [error localizedDescription]);
-            [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:[error localizedDescription]] callbackId:callbackId];
-        } else {
-            
-            NSDictionary *dict=[NSDictionary dictionaryWithObjectsAndKeys:fullpath,@"path",[[NSURL fileURLWithPath:fullpath] absoluteString],@"uri",@"image",@"mediaType",size,@"size",[NSNumber numberWithInt:index],@"index", nil];
-            [aListArray addObject:dict];
-            if([aListArray count]==[selectArray count]){
-                [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:aListArray] callbackId:callbackId];
+            UIImage* image = nil;
+            image=[UIImage imageWithData:imageData];
+            image = [image imageCorrectedForCaptureOrientation];
+            imageData = UIImageJPEGRepresentation(image, 1);
+
+            if ([filename hasSuffix:@".HEIC"]) {
+                imageData = UIImageJPEGRepresentation([UIImage imageWithData:imageData], 1);
+                filename = [filename stringByReplacingOccurrencesOfString:@".HEIC" withString:@".JPG"];
             }
+            NSString *fullpath=[NSString stringWithFormat:@"%@/%@%@", dmcPickerPath,[[NSProcessInfo processInfo] globallyUniqueString], filename];
+            NSNumber *size=[NSNumber numberWithLong:imageData.length];
+
+            NSError *error = nil;
+            if (![imageData writeToFile:fullpath options:NSAtomicWrite error:&error]) {
+                NSLog(@"%@", [error localizedDescription]);
+                [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:[error localizedDescription]] callbackId:callbackId];
+            } else {
+                
+                NSDictionary *dict=[NSDictionary dictionaryWithObjectsAndKeys:fullpath,@"path",[[NSURL fileURLWithPath:fullpath] absoluteString],@"uri",@"image",@"mediaType",size,@"size",[NSNumber numberWithInt:index],@"index", nil];
+                [aListArray addObject:dict];
+                if([aListArray count]==[selectArray count]){
+                    [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:aListArray] callbackId:callbackId];
+                }
+            }
+        } else {
+            [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:NSLocalizedString(@"photo_download_failed", nil)] callbackId:callbackId];
         }
-        
     }];
 }
 
